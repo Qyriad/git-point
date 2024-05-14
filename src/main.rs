@@ -45,8 +45,8 @@ struct GitPointCmd
 }
 
 /// The ref we will mutate.
-#[derive(Clone, PartialEq, Hash)]
-struct VictimRef<'id>
+#[derive(Debug, Clone, PartialEq, Hash)]
+struct VictimRef<'repo>
 {
 	/// The original, requested revision (`git rev-parse`able).
 	revspec: BString,
@@ -54,17 +54,18 @@ struct VictimRef<'id>
 	/// The short form of the ref, e.g. `main`.
 	short: BString,
 
-	/// The fully resolved ID.
-	resolved_id: Id<'id>,
+	/// The fully resolved commit ID that the ref to be mutated
+	/// points to, before the mutation.
+	resolved_id: Id<'repo>,
 
 	/// The first line of the commit message.
 	summary: BString,
 }
 
-impl<'id> VictimRef<'id>
+impl<'repo> VictimRef<'repo>
 {
-	/// Constructs a [FromRev] from a [Reference].
-	pub fn from(revspec: BString, reference: &'id Reference) -> Result<Self, Box<dyn StdError>>
+	/// Constructs a [VictimRef] from a [Reference].
+	pub fn from(revspec: BString, reference: &'repo Reference) -> Result<Self, Box<dyn StdError>>
 	{
 		let peeled = reference.clone().into_fully_peeled_id()
 			.tap_err(|e| error!("while peeling {}: {}", reference.name().as_bstr(), e))?;
@@ -73,8 +74,7 @@ impl<'id> VictimRef<'id>
 		let commit = peeled
 			.object()
 			.tap_err(|e| error!("while finding object {}: {}", id.to_hex(), e))?
-			.try_into_commit()
-			.tap_err(|e| error!("{} is not a commit: {}", id.to_hex(), e))?;
+			.into_commit();
 
 		let commit_summary = commit
 			.message_raw()
@@ -88,6 +88,48 @@ impl<'id> VictimRef<'id>
 			short: reference.name().shorten().to_owned(),
 			resolved_id: peeled,
 			summary: BString::from(commit_summary.to_vec()),
+		})
+	}
+}
+
+/// The revision we will mutate the [VictimRef] to.
+#[derive(Debug, Clone, PartialEq, Hash)]
+struct TargetRev<'repo>
+{
+	/// The original, requested revision (`git rev-parse`able).
+	revspec: BString,
+
+	/// The fully resolved commit ID we're going to mutate the [VictimRef] to.
+	resolved_id: Id<'repo>,
+
+	/// The first line of the commit message.
+	summary: BString,
+}
+
+impl<'repo> TargetRev<'repo>
+{
+	/// Constructs [TargetRev] from a revspec.
+	pub fn from(repo: &'repo Repository, revspec: BString) -> Result<Self, Box<dyn StdError>>
+	{
+		let id = repo.rev_parse_single(revspec.as_bstr())
+			.tap_err(|e| error!("while resolving revspec {}: {}", &revspec, e))?;
+
+		let commit = id
+			.object()
+			.tap_err(|e| error!("while finding object {}: {}", id.to_hex(), e))?
+			.into_commit();
+
+		let summary = commit
+			.message_raw()
+			.tap_err(|e| error!("while getting message of commit {}: {}", id.to_hex(), e))?
+			.lines()
+			.next()
+			.unwrap_or(b"<empty msg>");
+
+		Ok(Self {
+			revspec,
+			resolved_id: id,
+			summary: BString::from(summary.to_vec()),
 		})
 	}
 }
@@ -118,39 +160,21 @@ fn main() -> Result<(), Box<dyn StdError>>
 		},
 	};
 
-	let victim = VictimRef::from(BString::from(args.from.clone()), &ref_to_update)?;
-
-	let target_id = repo.rev_parse_single(args.to.as_str())
-		.map_err(|e| {
-			error!("error parsing revision {}", args.to.as_str());
-			e
-		})
-		.unwrap();
-	let target_obj = target_id
-		.object()
-		.unwrap();
-	let target_commit = target_obj
-		.clone()
-		.into_commit();
-	let target_commit_summary = target_commit
-		.message_raw()
-		.unwrap()
-		.lines()
-		.next()
-		.unwrap();
+	let victim = VictimRef::from(BString::from(args.from), &ref_to_update)?;
+	let target = TargetRev::from(&repo, BString::from(args.to))?;
 
 	eprintln!(
 		"Ref \x1b[34m{}\x1b[0m resolved to \x1b[33m{}\x1b[0m ({})",
-		args.to.as_str(),
-		target_id.shorten_or_id(),
-		target_commit_summary.as_bstr()
+		target.revspec.as_bstr(),
+		target.resolved_id.shorten_or_id(),
+		target.summary.as_bstr()
 	);
 
 	let reflog_msg = format!(
 		"git-point: updating {} from {} to {}",
 		ref_to_update.name().as_bstr(),
 		victim.resolved_id,
-		target_obj.id,
+		target.resolved_id,
 	);
 
 	let transaction = RefEdit {
@@ -161,7 +185,7 @@ fn main() -> Result<(), Box<dyn StdError>>
 				message: BString::from(reflog_msg),
 			},
 			expected: PreviousValue::MustExistAndMatch(Target::Peeled(victim.resolved_id.into())),
-			new: Target::Peeled(target_obj.id),
+			new: Target::Peeled(target.resolved_id.detach()),
 		},
 		name: ref_to_update.name().to_owned(),
 		deref: false,
@@ -174,8 +198,8 @@ fn main() -> Result<(), Box<dyn StdError>>
 		refname = ref_to_update.name().shorten(),
 		previd = victim.resolved_id.shorten_or_id(),
 		prevmsg = victim.summary.as_bstr(),
-		newid = target_id.shorten_or_id(),
-		newmsg = target_commit_summary.as_bstr(),
+		newid = target.resolved_id.shorten_or_id(),
+		newmsg = target.summary.as_bstr(),
 	);
 
 	Ok(())

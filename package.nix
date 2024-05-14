@@ -9,10 +9,7 @@
 		__structuredAttrs = true;
 	};
 
-	cargoArtifacts = craneLib.buildDepsOnly (commonArgs // {
-		src = craneLib.cleanCargoSource ./.;
-		strictDeps = true;
-	});
+	cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
 in craneLib.buildPackage (commonArgs // {
 
@@ -22,6 +19,7 @@ in craneLib.buildPackage (commonArgs // {
 		self,
 		rust-analyzer,
 	}: craneLib.devShell {
+		inherit cargoArtifacts;
 		inputsFrom = [ self ];
 		packages = [ rust-analyzer ];
 	};
@@ -29,6 +27,11 @@ in craneLib.buildPackage (commonArgs // {
 	passthru.clippy = craneLib.cargoClippy (commonArgs // {
 		inherit cargoArtifacts;
 	});
+
+	postInstall = ''
+		mkdir -p "$out/share/man/man1"
+		"$out/bin/git-point" --mangen "$out/share/man/man1" . .
+	'';
 
 	meta = {
 		homepage = "https://github.com/Qyirad/git-point";

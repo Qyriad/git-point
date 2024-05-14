@@ -4,6 +4,7 @@ use std::iter;
 use std::path::PathBuf;
 
 use bstr::{BString, ByteSlice};
+use clap::CommandFactory;
 use clap::{Parser, ValueEnum, ArgAction};
 
 use gix::refs::transaction::Change;
@@ -48,6 +49,10 @@ struct GitPointCmd
 	/// Note that this will *not* change any of the actual files in the worktree.
 	#[arg(long, short = 'W', action = ArgAction::SetTrue)]
 	pub allow_worktree: bool,
+
+	/// Generates man pages.
+	#[arg(long, hide = true)]
+	pub mangen: Option<PathBuf>,
 }
 
 /// The ref we will mutate.
@@ -181,7 +186,6 @@ fn check_worktrees(repo: &Repository, victim_ref: &Reference)
 			std::process::exit(1);
 		}
 	}
-
 }
 
 fn main() -> Result<(), Box<dyn StdError>>
@@ -193,6 +197,18 @@ fn main() -> Result<(), Box<dyn StdError>>
 		.init();
 
 	let args = GitPointCmd::parse();
+
+	if let Some(out_path) = args.mangen {
+		let man = clap_mangen::Man::new(GitPointCmd::command());
+
+		let mut man_buffer: Vec<u8> = Default::default();
+		man.render(&mut man_buffer)?;
+
+		std::fs::write(out_path.join("git-point.1"), man_buffer)?;
+
+		eprintln!("wrote man pages to {}", out_path.display());
+		std::process::exit(0);
+	}
 
 	let cwd: PathBuf = env::current_dir()?;
 
@@ -213,6 +229,8 @@ fn main() -> Result<(), Box<dyn StdError>>
 	if !args.allow_worktree {
 		// Check if the victim *ref* is checked out anywhere.
 		// This function will exit the process if so.
+		// Technically this is a TOC/TOU race condition, but if someone else is
+		// concurrently mutating this repo then we're fucked anyway.
 		check_worktrees(&repo, &victim_ref);
 	}
 
@@ -237,6 +255,7 @@ fn main() -> Result<(), Box<dyn StdError>>
 		deref: false,
 	};
 
+	trace!("mutating ref {}: {:?}", victim_ref.name().as_bstr(), &transaction);
 	let _edits = repo.edit_reference(transaction.clone()).unwrap();
 
 	eprintln!(

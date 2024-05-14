@@ -2,12 +2,14 @@
 name = "git-point"
 version = "0.1.0"
 edition = "2021"
+author = "Qyriad <qyriad@qyriad.me>"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 bstr = "1.9.1"
 clap = { version = "4.5.4", features = ["wrap_help", "derive"] }
+clap_mangen = "0.2.20"
 env_logger = "0.11.3"
 gix = { version = "0.62.0", features = ["revision"] }
 log = { version = "0.4.21", features = ["std"] }

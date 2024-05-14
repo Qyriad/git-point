@@ -2,7 +2,7 @@
 {
 	pkgs ? import <nixpkgs> { },
 	craneLib ? let
-		crane = builtins.fetchGit {
+		crane = fetchGit {
 			url = "https://github.com/ipetkov/crane";
 		};
 	in import crane { inherit pkgs; },

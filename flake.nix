@@ -14,8 +14,7 @@
 			pkgs = import nixpkgs { inherit system; };
 			craneLib = import crane { inherit pkgs; };
 
-			localPkgs = import ./default.nix { inherit pkgs craneLib; };
-			inherit (localPkgs) git-point;
+			git-point = import ./default.nix { inherit pkgs craneLib; };
 
 		in {
 			packages = {

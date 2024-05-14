@@ -8,8 +8,6 @@
 	in import crane { inherit pkgs; },
 }:
 
-{
-	git-point = pkgs.callPackage ./package.nix {
-		inherit craneLib;
-	};
+pkgs.callPackage ./package.nix {
+	inherit craneLib;
 }

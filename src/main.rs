@@ -163,13 +163,6 @@ fn main() -> Result<(), Box<dyn StdError>>
 	let victim = VictimRef::from(BString::from(args.from), &ref_to_update)?;
 	let target = TargetRev::from(&repo, BString::from(args.to))?;
 
-	eprintln!(
-		"Ref \x1b[34m{}\x1b[0m resolved to \x1b[33m{}\x1b[0m ({})",
-		target.revspec.as_bstr(),
-		target.resolved_id.shorten_or_id(),
-		target.summary.as_bstr()
-	);
-
 	let reflog_msg = format!(
 		"git-point: updating {} from {} to {}",
 		ref_to_update.name().as_bstr(),

@@ -26,6 +26,10 @@ in craneLib.buildPackage (commonArgs // {
 		packages = [ rust-analyzer ];
 	};
 
+	passthru.clippy = craneLib.cargoClippy (commonArgs // {
+		inherit cargoArtifacts;
+	});
+
 	meta = {
 		homepage = "https://github.com/Qyirad/git-point";
 		maintainers = with lib.maintainers; [ qyriad ];

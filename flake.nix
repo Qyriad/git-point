@@ -21,7 +21,14 @@
 				default = git-point;
 				inherit git-point;
 			};
+
 			devShells.default = pkgs.callPackage git-point.mkDevShell { self = git-point; };
+
+			checks = {
+				package = self.packages.${system}.git-point;
+				clippy = self.packages.${system}.git-point.clippy;
+				devShell = self.devShells.${system}.default;
+			};
 		}) # eachDefaultSystem
 	; # outputs
 }

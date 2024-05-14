@@ -144,20 +144,17 @@ fn main() -> Result<(), Box<dyn StdError>>
 
 	let args = GitPointCmd::parse();
 
-	let cwd: PathBuf = env::current_dir()
-		.expect("cannot open current directory");
+	let cwd: PathBuf = env::current_dir()?;
 
 	let repo: Repository = gix::open(&cwd)
-		.expect(&format!("cannot open Git repo in {}", cwd.display()));
+		.tap_err(|e| error!("while opening git repo in {}: {}", cwd.display(), e))?;
 
 	let ref_to_update = match &args.new {
 		Some(kind) => {
 			todo!();
 		},
-		None => {
-			repo.find_reference(&args.from)
-				.expect(&format!("cannot get ref {}", &args.from))
-		},
+		None => repo.find_reference(&args.from)
+			.tap_err(|e| error!("while finding reference {}: {}", &args.from, e))?
 	};
 
 	let victim = VictimRef::from(BString::from(args.from), &ref_to_update)?;

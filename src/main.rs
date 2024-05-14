@@ -260,7 +260,7 @@ fn main() -> Result<(), Box<dyn StdError>>
 
 	eprintln!(
 		"Updated \x1b[34m{refname}\x1b[0m from \x1b[33m{previd}\x1b[0m ({prevmsg}) to \x1b[33m{newid}\x1b[0m ({newmsg})",
-		refname = victim_ref.name().shorten(),
+		refname = victim_ref.name().as_bstr(),
 		previd = victim.resolved_id.shorten_or_id(),
 		prevmsg = victim.summary.as_bstr(),
 		newid = target.resolved_id.shorten_or_id(),

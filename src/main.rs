@@ -161,7 +161,7 @@ fn check_worktrees(repo: &Repository, victim_ref: &Reference)
 
 	for tree_repo in worktree_repos {
 		let dir = tree_repo.work_dir().expect("unreachable");
-		eprintln!("looking at worktree {}", dir.display());
+		debug!("checking if worktree {} has {} checked out", dir.display(), victim_ref.name().as_bstr());
 
 		let tree_head = tree_repo
 			.head_ref()

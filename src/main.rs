@@ -2,22 +2,23 @@ use std::env;
 use std::error::Error as StdError;
 use std::path::PathBuf;
 
-use bstr::{BString, ByteSlice, ByteVec};
-use clap::{Parser, ValueEnum, Arg, ArgAction};
+use bstr::{BString, ByteSlice};
+use clap::{Parser, ValueEnum, ArgAction};
 
-use gix::prelude::*;
 use gix::refs::transaction::Change;
 use gix::refs::transaction::LogChange;
 use gix::refs::transaction::PreviousValue;
 use gix::refs::transaction::RefEdit;
 use gix::refs::transaction::RefLog;
 use gix::refs::Target;
-use gix::Object;
-use gix::ObjectId;
+use gix::Id;
+use gix::Reference;
 use gix::Repository;
 
 #[allow(unused)]
 use log::{trace, debug, warn, info, error};
+
+use tap::TapFallible;
 
 #[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Hash)]
 #[derive(ValueEnum)]
@@ -33,46 +34,65 @@ enum NewRefKind
 struct GitPointCmd
 {
 	/// ref to update
-	from: String,
+	pub from: String,
 
 	/// revision to point <FROM> to
-	to: String,
+	pub to: String,
 
 	/// create a new ref of <KIND> instead of updating an existing one
 	#[arg(short, long, action = ArgAction::Set, value_name = "KIND")]
-	new: Option<NewRefKind>,
+	pub new: Option<NewRefKind>,
 }
 
-//fn resolve_target<'r>(repo: &'r Repository, args: &GitPointCmd) -> Result<Object<'r>, Box<dyn StdError>>
-//{
-//	let to = args.to.as_str();
-//
-//	let target_id = repo.rev_parse_single(to)
-//		.map_err(|e| {
-//			error!("error parsing revision {}", to);
-//			e
-//		})?;
-//
-//	let target_object = target_id
-//		.object()
-//		.unwrap();
-//
-//	let target_commit = target_object
-//		.clone()
-//		.into_commit();
-//	let msg = target_commit
-//		.message_raw()
-//		.unwrap()
-//		.lines()
-//		.next()
-//		.unwrap();
-//
-//	eprintln!("Ref \x1b[34m{}\x1b[0m resolved to \x1b[33m{}\x1b[0m ({})", to, target_id.shorten_or_id(), msg.as_bstr());
-//
-//	Ok(target_object)
-//}
+/// The ref we will mutate.
+#[derive(Clone, PartialEq, Hash)]
+struct VictimRef<'id>
+{
+	/// The original, requested revision (`git rev-parse`able).
+	revspec: BString,
 
-fn main()
+	/// The short form of the ref, e.g. `main`.
+	short: BString,
+
+	/// The fully resolved ID.
+	resolved_id: Id<'id>,
+
+	/// The first line of the commit message.
+	summary: BString,
+}
+
+impl<'id> VictimRef<'id>
+{
+	/// Constructs a [FromRev] from a [Reference].
+	pub fn from(revspec: BString, reference: &'id Reference) -> Result<Self, Box<dyn StdError>>
+	{
+		let peeled = reference.clone().into_fully_peeled_id()
+			.tap_err(|e| error!("while peeling {}: {}", reference.name().as_bstr(), e))?;
+		let id = peeled.detach();
+
+		let commit = peeled
+			.object()
+			.tap_err(|e| error!("while finding object {}: {}", id.to_hex(), e))?
+			.try_into_commit()
+			.tap_err(|e| error!("{} is not a commit: {}", id.to_hex(), e))?;
+
+		let commit_summary = commit
+			.message_raw()
+			.tap_err(|e| error!("while getting message of commit {}: {}", id.to_hex(), e))?
+			.lines()
+			.next()
+			.unwrap_or(b"<empty msg>");
+
+		Ok(Self {
+			revspec,
+			short: reference.name().shorten().to_owned(),
+			resolved_id: peeled,
+			summary: BString::from(commit_summary.to_vec()),
+		})
+	}
+}
+
+fn main() -> Result<(), Box<dyn StdError>>
 {
 	env_logger::builder()
 		// Default to INFO rather than WARN, but let the user override it.
@@ -98,13 +118,7 @@ fn main()
 		},
 	};
 
-	let current_id = ref_to_update.clone().peel_to_id_in_place().unwrap();
-	let current_commit = repo
-		.find_object(current_id).unwrap()
-		.into_commit();
-	let current_commit_summary = current_commit
-		.message_raw().unwrap()
-		.lines().next().unwrap();
+	let victim = VictimRef::from(BString::from(args.from.clone()), &ref_to_update)?;
 
 	let target_id = repo.rev_parse_single(args.to.as_str())
 		.map_err(|e| {
@@ -135,7 +149,7 @@ fn main()
 	let reflog_msg = format!(
 		"git-point: updating {} from {} to {}",
 		ref_to_update.name().as_bstr(),
-		current_id,
+		victim.resolved_id,
 		target_obj.id,
 	);
 
@@ -146,7 +160,7 @@ fn main()
 				force_create_reflog: false,
 				message: BString::from(reflog_msg),
 			},
-			expected: PreviousValue::MustExistAndMatch(Target::Peeled(current_id.into())),
+			expected: PreviousValue::MustExistAndMatch(Target::Peeled(victim.resolved_id.into())),
 			new: Target::Peeled(target_obj.id),
 		},
 		name: ref_to_update.name().to_owned(),
@@ -158,9 +172,11 @@ fn main()
 	eprintln!(
 		"Updated \x1b[34m{refname}\x1b[0m from \x1b[33m{previd}\x1b[0m ({prevmsg}) to \x1b[33m{newid}\x1b[0m ({newmsg})",
 		refname = ref_to_update.name().shorten(),
-		previd = current_id.shorten_or_id(),
-		prevmsg = current_commit_summary.as_bstr(),
+		previd = victim.resolved_id.shorten_or_id(),
+		prevmsg = victim.summary.as_bstr(),
 		newid = target_id.shorten_or_id(),
 		newmsg = target_commit_summary.as_bstr(),
 	);
+
+	Ok(())
 }

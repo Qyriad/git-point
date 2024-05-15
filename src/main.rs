@@ -326,8 +326,54 @@ fn main() -> Result<(), Box<dyn StdError>>
 			Victim::New(NewVictim::new(*kind, BString::from(args.from.clone())))
 		},
 		None => {
-			let reference = repo.find_reference(&args.from)
+			let reference = repo
+				.find_reference(&args.from)
 				.tap_err(|e| error!("while finding reference {}: {}", &args.from, e))?;
+
+			// Make sure args.from is not ambiguous and can only refer to one ref.
+			// gix does not have a convenient "repo.find_references()", so what we do here
+			// is iterate through all refs, filter out ones that are the same as `reference`,
+			// and check for any that have the same shortening as our refspec.
+			let refs_iter = repo
+				.references()
+				.tap_err(|e| error!("while finding reference {}: {}", &args.from, e))?;
+			let ambiguous_refs: Vec<Reference> = refs_iter
+				.all()
+				.tap_err(|e| error!("while finding reference {}: {}", &args.from, e))?
+				.filter_map(|r| match r {
+					// Note: .name() is the *full* name.
+					// Reference does not impl PartialEq,
+					// so we check by full name instead.
+					Ok(r) if r.name() != reference.name() => {
+						if r.name().shorten() == args.from {
+							Some(r)
+						} else {
+							None
+						}
+					},
+
+					Ok(_) => None,
+
+					Err(e) => {
+						warn!("ignoring error checking for ambiguous reference: {}", e);
+						None
+					},
+				})
+				.collect();
+
+			if !ambiguous_refs.is_empty() {
+				let ambiguous_ref_names: Vec<&BStr> = iter::once(reference.name().as_bstr())
+					.chain(ambiguous_refs.iter().map(|r| r.name().as_bstr()))
+					.collect();
+
+				eprintln!(
+					"\x1b[91merror:\x1b[0m refspec '\x1b[34m{}\x1b[0m' is ambiguous and must be qualified; could be any of: {}",
+					&args.from,
+					bstr::join(", ", ambiguous_ref_names.as_slice()).as_bstr()
+				);
+
+				std::process::exit(3);
+			}
 
 			if !args.allow_worktree {
 				// Check if the victim *ref* is checked out anywhere.

@@ -3,7 +3,7 @@ use std::error::Error as StdError;
 use std::iter;
 use std::path::PathBuf;
 
-use bstr::{BString, ByteSlice};
+use bstr::{BStr, BString, ByteSlice};
 use clap::CommandFactory;
 use clap::{Parser, ValueEnum, ArgAction};
 
@@ -12,7 +12,8 @@ use gix::refs::transaction::LogChange;
 use gix::refs::transaction::PreviousValue;
 use gix::refs::transaction::RefEdit;
 use gix::refs::transaction::RefLog;
-use gix::refs::Target;
+use gix::refs::{FullName, Target};
+use gix::refs::Category as RefCategory;
 use gix::Id;
 use gix::Reference;
 use gix::Repository;
@@ -26,8 +27,33 @@ use tap::TapFallible;
 #[derive(ValueEnum)]
 enum NewRefKind
 {
-	Branch,
+	/// New lightweight tag in refs/tags/<FROM>
 	Tag,
+
+	/// New branch refs/heads/<FROM>
+	Branch,
+
+	/// refs/remotes/<FROM> (e.g. refs/remotes/origin/main)
+	RemoteBranch,
+
+	/// No prefix, interpreted literally (like update-ref, be careful!).
+	Raw,
+
+	// TODO: notes?
+}
+
+impl NewRefKind
+{
+	fn to_prefix(self) -> &'static BStr
+	{
+		use NewRefKind::*;
+		match self {
+			Tag => RefCategory::Tag.prefix(),
+			Branch => RefCategory::LocalBranch.prefix(),
+			RemoteBranch => RefCategory::RemoteBranch.prefix(),
+			Raw => BStr::new(b""),
+		}
+	}
 }
 
 #[derive(Debug, Clone, PartialEq, Hash)]
@@ -55,12 +81,43 @@ struct GitPointCmd
 	pub mangen: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, PartialEq, Hash)]
+enum Victim<'repo>
+{
+	Known(KnownVictim<'repo>),
+	New(NewVictim),
+}
+
+#[derive(Debug, Clone, PartialEq, Hash)]
+struct NewVictim
+{
+	revspec: BString,
+	/// The fully qualified name of the ref, e.g. refs/heads/main.
+	name: BString,
+	short: BString,
+}
+
+impl<'repo> Victim<'repo>
+{
+	pub fn name_bstr(&self) -> &BStr
+	{
+		use Victim::*;
+		match self {
+			Known(victim) => victim.name.as_bstr(),
+			New(new) => new.name.as_bstr(),
+		}
+	}
+}
+
 /// The ref we will mutate.
 #[derive(Debug, Clone, PartialEq, Hash)]
-struct VictimRef<'repo>
+struct KnownVictim<'repo>
 {
 	/// The original, requested revision (`git rev-parse`able).
 	revspec: BString,
+
+	/// Rich object representing the fully qualified name of the ref, e.g. `refs/heads/main`.
+	name: FullName,
 
 	/// The short form of the ref, e.g. `main`.
 	short: BString,
@@ -73,10 +130,10 @@ struct VictimRef<'repo>
 	summary: BString,
 }
 
-impl<'repo> VictimRef<'repo>
+impl<'repo> KnownVictim<'repo>
 {
 	/// Constructs a [VictimRef] from a [Reference].
-	pub fn from(revspec: BString, reference: &'repo Reference) -> Result<Self, Box<dyn StdError>>
+	pub fn from(revspec: BString, reference: Reference<'repo>) -> Result<Self, Box<dyn StdError>>
 	{
 		let peeled = reference.clone().into_fully_peeled_id()
 			.tap_err(|e| error!("while peeling {}: {}", reference.name().as_bstr(), e))?;
@@ -96,11 +153,33 @@ impl<'repo> VictimRef<'repo>
 
 		Ok(Self {
 			revspec,
+			name: reference.name().to_owned(),
 			short: reference.name().shorten().to_owned(),
 			resolved_id: peeled,
 			summary: BString::from(commit_summary.to_vec()),
 		})
 	}
+}
+
+impl NewVictim
+{
+    pub fn new(kind: NewRefKind, revspec: BString) -> Self
+    {
+        let prefix = kind.to_prefix();
+        let refname: BString = prefix
+            .iter()
+            .chain(revspec.as_bytes())
+            .copied()
+            .collect();
+        debug!("going to create ref {}", &refname);
+
+        Self {
+            revspec,
+            short: refname.strip_prefix(prefix.as_bytes()).unwrap_or(&refname).into(),
+			// lol, has to be in this order to avoid a clone().
+			name: refname,
+        }
+    }
 }
 
 /// The revision we will mutate the [VictimRef] to.
@@ -215,57 +294,135 @@ fn main() -> Result<(), Box<dyn StdError>>
 	let repo: Repository = gix::open(&cwd)
 		.tap_err(|e| error!("while opening git repo in {}: {}", cwd.display(), e))?;
 
-	let victim_ref = match &args.new {
+	let victim = match &args.new {
 		Some(kind) => {
-			todo!();
+			debug!("requested to create new {} ref", kind.to_prefix());
+
+			// Disallow if the ref already exists, though we will
+			// enforce this at the transaction level below as well.
+			let maybe_existing = repo.try_find_reference(&args.from)
+				.tap_err(|e| warn!("ignoring error checking if {} already exists: {}", args.from, e));
+
+			if let Ok(Some(existing_ref)) = maybe_existing {
+
+				let existing_id = existing_ref
+					.clone()
+					.into_fully_peeled_id()
+					.map(|peeled| peeled.to_hex().to_string())
+					.unwrap_or_else(|e| {
+						warn!("error resolving existing ref {}: {}", existing_ref.name().as_bstr(), e);
+						String::from("<could not resolve>")
+					});
+
+				eprintln!(
+					"\x1b[91merror:\x1b[0m refusing to create ref \x1b[34m{}\x1b[0m which already exists at \x1b[33m{}\x1b[0m",
+					existing_ref.name().as_bstr(),
+					existing_id,
+				);
+
+				std::process::exit(2);
+			}
+
+			Victim::New(NewVictim::new(*kind, BString::from(args.from.clone())))
 		},
-		None => repo.find_reference(&args.from)
-			.tap_err(|e| error!("while finding reference {}: {}", &args.from, e))?
+		None => {
+			let reference = repo.find_reference(&args.from)
+				.tap_err(|e| error!("while finding reference {}: {}", &args.from, e))?;
+
+			if !args.allow_worktree {
+				// Check if the victim *ref* is checked out anywhere.
+				// This function will exit the process if so.
+				// Technically this is a TOC/TOU race condition, but if someone else is
+				// concurrently mutating this repo then we're fucked anyway.
+				check_worktrees(&repo, &reference);
+			}
+
+			Victim::Known(KnownVictim::from(BString::from(args.from.clone()), reference)?)
+		},
 	};
 
-	let victim = VictimRef::from(BString::from(args.from), &victim_ref)?;
 	let target = TargetRev::from(&repo, BString::from(args.to))?;
 
-	if !args.allow_worktree {
-		// Check if the victim *ref* is checked out anywhere.
-		// This function will exit the process if so.
-		// Technically this is a TOC/TOU race condition, but if someone else is
-		// concurrently mutating this repo then we're fucked anyway.
-		check_worktrees(&repo, &victim_ref);
-	}
-
-	let reflog_msg = format!(
-		"git-point: updating {} from {} to {}",
-		victim_ref.name().as_bstr(),
-		victim.resolved_id,
-		target.resolved_id,
-	);
+    let reflog_msg = match victim {
+        Victim::Known(ref victim_ref) => format!(
+            "git-point: updating {} from {} to {}",
+			victim_ref.name.as_bstr(),
+            victim_ref.resolved_id,
+            target.resolved_id,
+        ),
+		Victim::New(ref name) => format!(
+			"git-point: created {} from {}",
+			name.name.as_bstr(),
+			target.resolved_id
+		),
+    };
 
 	let transaction = RefEdit {
 		change: Change::Update {
 			log: LogChange {
 				mode: RefLog::AndReference,
 				force_create_reflog: false,
-				message: BString::from(reflog_msg),
+				message: BString::from(reflog_msg.clone()),
 			},
-			expected: PreviousValue::MustExistAndMatch(Target::Peeled(victim.resolved_id.into())),
+			expected: match &victim {
+				Victim::Known(victim_ref) => {
+					PreviousValue::MustExistAndMatch(Target::Peeled(victim_ref.resolved_id.into()))
+				},
+				Victim::New(_new) => PreviousValue::MustNotExist,
+			},
 			new: Target::Peeled(target.resolved_id.detach()),
 		},
-		name: victim_ref.name().to_owned(),
+		name: {
+			FullName::try_from(victim.name_bstr()).unwrap()
+		},
 		deref: false,
 	};
 
-	trace!("mutating ref {}: {:?}", victim_ref.name().as_bstr(), &transaction);
-	let _edits = repo.edit_reference(transaction.clone()).unwrap();
+	if log::log_enabled!(log::Level::Trace) {
+		match &victim {
+			Victim::Known(known) => {
+				trace!("mutating ref {}: {:?}", known.name.as_bstr(), &transaction);
+			},
+			Victim::New(new) => {
+				trace!("creating ref {}: {:?}", new.name.as_bstr(), &transaction);
+			},
+		}
+	}
 
-	eprintln!(
-		"Updated \x1b[34m{refname}\x1b[0m from \x1b[33m{previd}\x1b[0m ({prevmsg}) to \x1b[33m{newid}\x1b[0m ({newmsg})",
-		refname = victim_ref.name().as_bstr(),
-		previd = victim.resolved_id.shorten_or_id(),
-		prevmsg = victim.summary.as_bstr(),
-		newid = target.resolved_id.shorten_or_id(),
-		newmsg = target.summary.as_bstr(),
-	);
+	let _edits = repo.edit_reference(transaction.clone())
+		.tap_err(|e| {
+			match &victim {
+				Victim::Known(_known) => error!(
+					"while mutating ref {} to {}: {}",
+					victim.name_bstr(),
+					target.resolved_id,
+					e,
+				),
+				Victim::New(_new) => error!(
+					"while creating ref {} at {}: {}",
+					victim.name_bstr(),
+					target.resolved_id,
+					e,
+				),
+			}
+		})?;
+
+	match &victim {
+		Victim::Known(known) => eprintln!(
+			"Updated \x1b[34m{refname}\x1b[0m from \x1b[33m{previd}\x1b[0m ({prevmsg}) to \x1b[33m{newid}\x1b[0m ({newmsg})",
+			refname = known.name.as_bstr(),
+			previd = known.resolved_id.shorten_or_id(),
+			prevmsg = known.summary.as_bstr(),
+			newid = target.resolved_id.shorten_or_id(),
+			newmsg = target.summary.as_bstr(),
+		),
+		Victim::New(new) => eprintln!(
+			"Created \x1b[34m{refname}\x1b[0m at \x1b[33m{target_id}\x1b[0m ({msg})",
+			refname = new.name.as_bstr(),
+			target_id = target.resolved_id.shorten_or_id(),
+			msg = target.summary,
+		)
+	}
 
 	Ok(())
 }

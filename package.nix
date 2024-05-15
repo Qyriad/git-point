@@ -1,12 +1,20 @@
 {
 	lib,
 	craneLib,
+	stdenv,
+	libiconv,
 }: let
+
+	inherit (stdenv) hostPlatform;
 
 	commonArgs = {
 		src = craneLib.cleanCargoSource ./.;
 		strictDeps = true;
 		__structuredAttrs = true;
+
+		buildInputs = lib.optionals hostPlatform.isDarwin [
+			libiconv
+		];
 	};
 
 	cargoArtifacts = craneLib.buildDepsOnly commonArgs;

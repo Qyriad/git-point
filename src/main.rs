@@ -23,6 +23,67 @@ use log::{trace, debug, warn, info, error};
 
 use tap::TapFallible;
 
+type BoxDynError = Box<dyn StdError>;
+
+#[derive(Debug, Clone)]
+enum MaybeAmbigRef<'repo>
+{
+	Ambiguous(Vec<BString>),
+	NotAmbiguous(Reference<'repo>),
+}
+
+trait RepositoryExt
+{
+	fn find_ambiguous_references(&self, refname: &BStr) -> Result<MaybeAmbigRef, BoxDynError>;
+}
+
+impl RepositoryExt for Repository
+{
+	fn find_ambiguous_references(&self, refname: &BStr) -> Result<MaybeAmbigRef, BoxDynError>
+	{
+		let reference = self
+			.find_reference(refname)
+			.tap_err(|e| error!("while finding reference {}: {}", refname, e))?;
+
+		let refs_iter = self
+			.references()
+			.tap_err(|e| error!("while finding reference {}: {}", refname, e))?;
+
+		let ambiguous_refs: Vec<Reference> = refs_iter
+			.all()
+			.tap_err(|e| error!("while finding reference {}: {}", refname, e))?
+			.filter_map(|r| match r {
+				// Note: .name() is the *full* name.
+				// Reference does not impl PartialEq, so we check by full name instead.
+				Ok(r) if r.name() != reference.name() => {
+					if r.name().shorten() == refname {
+						Some(r)
+					} else {
+						None
+					}
+				},
+				Ok(_) => None,
+				Err(e) => {
+					warn!("ignoring error checking for ambiguous reference: {}", e);
+					None
+				},
+			})
+			.collect();
+
+
+		if ambiguous_refs.is_empty() {
+			return Ok(MaybeAmbigRef::NotAmbiguous(reference));
+		}
+
+		let ambiguous_ref_names: Vec<BString> = iter::once(reference.name().as_bstr())
+			.chain(ambiguous_refs.iter().map(|r| r.name().as_bstr()))
+			.map(ToOwned::to_owned)
+			.collect();
+
+		Ok(MaybeAmbigRef::Ambiguous(ambiguous_ref_names))
+	}
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Hash)]
 #[derive(ValueEnum)]
 enum NewRefKind
@@ -334,42 +395,14 @@ fn main() -> Result<(), Box<dyn StdError>>
 			// gix does not have a convenient "repo.find_references()", so what we do here
 			// is iterate through all refs, filter out ones that are the same as `reference`,
 			// and check for any that have the same shortening as our refspec.
-			let refs_iter = repo
-				.references()
-				.tap_err(|e| error!("while finding reference {}: {}", &args.from, e))?;
-			let ambiguous_refs: Vec<Reference> = refs_iter
-				.all()
-				.tap_err(|e| error!("while finding reference {}: {}", &args.from, e))?
-				.filter_map(|r| match r {
-					// Note: .name() is the *full* name.
-					// Reference does not impl PartialEq,
-					// so we check by full name instead.
-					Ok(r) if r.name() != reference.name() => {
-						if r.name().shorten() == args.from {
-							Some(r)
-						} else {
-							None
-						}
-					},
 
-					Ok(_) => None,
+			let from_bytes: &BStr = args.from.as_bytes().into();
 
-					Err(e) => {
-						warn!("ignoring error checking for ambiguous reference: {}", e);
-						None
-					},
-				})
-				.collect();
-
-			if !ambiguous_refs.is_empty() {
-				let ambiguous_ref_names: Vec<&BStr> = iter::once(reference.name().as_bstr())
-					.chain(ambiguous_refs.iter().map(|r| r.name().as_bstr()))
-					.collect();
-
+			if let MaybeAmbigRef::Ambiguous(ambiguous_names) = repo.find_ambiguous_references(from_bytes)? {
 				eprintln!(
 					"\x1b[91merror:\x1b[0m refspec '\x1b[34m{}\x1b[0m' is ambiguous and must be qualified; could be any of: {}",
 					&args.from,
-					bstr::join(", ", ambiguous_ref_names.as_slice()).as_bstr()
+					bstr::join(", ", ambiguous_names.as_slice()).as_bstr()
 				);
 
 				std::process::exit(3);

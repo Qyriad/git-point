@@ -14,7 +14,7 @@ use gix::refs::transaction::RefEdit;
 use gix::refs::transaction::RefLog;
 use gix::refs::{FullName, Target};
 use gix::refs::Category as RefCategory;
-use gix::Id;
+use gix::Id as GixId;
 use gix::Reference;
 use gix::Repository;
 
@@ -25,14 +25,19 @@ use tap::TapFallible;
 
 type BoxDynError = Box<dyn StdError>;
 
+mod delegate;
+
 #[derive(Debug, Clone)]
-enum MaybeAmbigRef<'repo>
+pub enum MaybeAmbigRef<'repo>
 {
-	Ambiguous(Vec<BString>),
+	Ambiguous { requested: BString, possible: Vec<BString> },
+    // This field isn't actually used right now (because all code paths
+    // already have the ref some other way), but like, it *could* be, y'know?
+    #[allow(dead_code)]
 	NotAmbiguous(Reference<'repo>),
 }
 
-trait RepositoryExt
+pub trait RepositoryExt
 {
 	fn find_ambiguous_references(&self, refname: &BStr) -> Result<MaybeAmbigRef, BoxDynError>;
 }
@@ -70,7 +75,6 @@ impl RepositoryExt for Repository
 			})
 			.collect();
 
-
 		if ambiguous_refs.is_empty() {
 			return Ok(MaybeAmbigRef::NotAmbiguous(reference));
 		}
@@ -80,7 +84,7 @@ impl RepositoryExt for Repository
 			.map(ToOwned::to_owned)
 			.collect();
 
-		Ok(MaybeAmbigRef::Ambiguous(ambiguous_ref_names))
+		Ok(MaybeAmbigRef::Ambiguous{ requested: refname.to_owned(), possible: ambiguous_ref_names, })
 	}
 }
 
@@ -185,7 +189,7 @@ struct KnownVictim<'repo>
 
 	/// The fully resolved commit ID that the ref to be mutated
 	/// points to, before the mutation.
-	resolved_id: Id<'repo>,
+	resolved_id: GixId<'repo>,
 
 	/// The first line of the commit message.
 	summary: BString,
@@ -251,7 +255,7 @@ struct TargetRev<'repo>
 	revspec: BString,
 
 	/// The fully resolved commit ID we're going to mutate the [VictimRef] to.
-	resolved_id: Id<'repo>,
+	resolved_id: GixId<'repo>,
 
 	/// The first line of the commit message.
 	summary: BString,
@@ -262,24 +266,54 @@ impl<'repo> TargetRev<'repo>
 	/// Constructs [TargetRev] from a revspec.
 	pub fn from(repo: &'repo Repository, revspec: BString) -> Result<Self, Box<dyn StdError>>
 	{
-		let id = repo.rev_parse_single(revspec.as_bstr())
-			.tap_err(|e| error!("while resolving revspec {}: {}", &revspec, e))?;
+        // Bit of a hack here.
+        // Gitoxide doesn't really have a way to use only part of its rev parsing logic.
+        // We can create a custom handler for essentially every event gix might encounter
+        // while parsing a revspec, but we can't reuse its normal logic for only parts of it
+        // (private structs :pensive:).
+        // So what we do is make one of those custom handlers, which is a struct that impls
+        // gix::revision::plumbing::spec::parse::Delegate, and stub everything except for
+        // gix::revision::plumbing::spec::parse::delegate::Revision::find_ref(), which will
+        // be called when gix wants to resolve a ref name in a rev spec. find_ref() will then
+        // iterate through the possible references that it was called with, and set if only one
+        // was found or if multiple were found.
+        // If only one was found, then we just call gix's high-level rev parse function, because
+        // *man* do I not want to reimplement the entire delegate just to save one extra rev parse.
+        let mut revparsing_delegate = delegate::StubDisambDelegate::new(repo);
+        revparsing_delegate.parse(revspec.as_bstr())?;
+        let found_refs = revparsing_delegate.found_refs.expect("unreachable");
 
-		let commit = id
+        if let MaybeAmbigRef::Ambiguous { requested, possible } = found_refs {
+            eprintln!(
+                "\x1b[91merror:\x1b[0m refname '\x1b[34m{}\x1b[0m in '{}' is ambiguous and must be qualified; \
+                could be any of: {}",
+                requested,
+                revspec,
+                bstr::join(", ", possible).as_bstr(),
+            );
+
+            std::process::exit(3);
+        };
+
+        let rev_id = repo.rev_parse_single(revspec.as_bstr())
+            .tap_err(|e| error!("while parsing revspec {}: {}", revspec.as_bstr(), e))?;
+        let rev_hex = || rev_id.to_hex();
+
+		let commit = rev_id
 			.object()
-			.tap_err(|e| error!("while finding object {}: {}", id.to_hex(), e))?
+			.tap_err(|e| error!("while finding object {}: {}", rev_hex(), e))?
 			.into_commit();
 
 		let summary = commit
 			.message_raw()
-			.tap_err(|e| error!("while getting message of commit {}: {}", id.to_hex(), e))?
+			.tap_err(|e| error!("while getting message of commit {}: {}", rev_hex(), e))?
 			.lines()
 			.next()
 			.unwrap_or(b"<empty msg>");
 
 		Ok(Self {
 			revspec,
-			resolved_id: id,
+			resolved_id: rev_id,
 			summary: BString::from(summary.to_vec()),
 		})
 	}
@@ -395,14 +429,14 @@ fn main() -> Result<(), Box<dyn StdError>>
 			// gix does not have a convenient "repo.find_references()", so what we do here
 			// is iterate through all refs, filter out ones that are the same as `reference`,
 			// and check for any that have the same shortening as our refspec.
-
 			let from_bytes: &BStr = args.from.as_bytes().into();
-
-			if let MaybeAmbigRef::Ambiguous(ambiguous_names) = repo.find_ambiguous_references(from_bytes)? {
+			let ambiguous_refs = repo.find_ambiguous_references(from_bytes)?;
+            if let MaybeAmbigRef::Ambiguous { ref requested, ref possible } = ambiguous_refs {
 				eprintln!(
-					"\x1b[91merror:\x1b[0m refspec '\x1b[34m{}\x1b[0m' is ambiguous and must be qualified; could be any of: {}",
-					&args.from,
-					bstr::join(", ", ambiguous_names.as_slice()).as_bstr()
+					"\x1b[91merror:\x1b[0m refspec '\x1b[34m{}\x1b[0m' is ambiguous and must be qualified; \
+                    could be any of: {}",
+                    &requested,
+					bstr::join(", ", possible).as_bstr()
 				);
 
 				std::process::exit(3);

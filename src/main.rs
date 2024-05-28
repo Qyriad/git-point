@@ -1,4 +1,5 @@
 use std::env;
+use std::io::Write;
 use std::iter;
 use std::path::PathBuf;
 
@@ -125,23 +126,25 @@ impl NewRefKind
 struct GitPointCmd
 {
 	/// ref to update
-	pub from: String,
+	#[arg(required_unless_present = "mangen")]
+	pub from: Option<String>,
 
 	/// revision to point <FROM> to
-	pub to: String,
+	#[arg(required_unless_present = "mangen")]
+	pub to: Option<String>,
 
 	/// create a new ref of <KIND> instead of updating an existing one
 	#[arg(short, long, action = ArgAction::Set, value_name = "KIND")]
 	pub new: Option<NewRefKind>,
 
 	/// Allow mutating checked out refs.
-	/// Note that this will *not* change any of the actual files in the worktree.
+	/// This will *not* change any of the actual files in the worktree.
 	#[arg(long, short = 'W', action = ArgAction::SetTrue)]
 	pub allow_worktree: bool,
 
-	/// Generates man pages.
-	#[arg(long, hide = true)]
-	pub mangen: Option<PathBuf>,
+	/// Generate git-point.1 man page to stdout, and exit.
+	#[arg(long)]
+	pub mangen: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Hash)]
@@ -385,19 +388,22 @@ fn main() -> miette::Result<()>
 		.parse_default_env()
 		.init();
 
-	let args = GitPointCmd::parse();
+	let mut args = GitPointCmd::parse();
 
-	if let Some(out_path) = args.mangen {
+	if args.mangen {
 		let man = clap_mangen::Man::new(GitPointCmd::command());
 
 		let mut man_buffer: Vec<u8> = Default::default();
 		man.render(&mut man_buffer).into_diagnostic()?;
 
-		std::fs::write(out_path.join("git-point.1"), man_buffer).into_diagnostic()?;
+		std::io::stdout().lock().write_all(&man_buffer).into_diagnostic()?;
 
-		eprintln!("wrote man pages to {}", out_path.display());
 		std::process::exit(0);
 	}
+
+	// These can only be none if --mangen is specified, which always exists the process.
+	let from = args.from.take().unwrap();
+	let to = args.to.take().unwrap();
 
 	let cwd: PathBuf = env::current_dir().into_diagnostic()?;
 
@@ -411,8 +417,8 @@ fn main() -> miette::Result<()>
 
 			// Disallow if the ref already exists, though we will
 			// enforce this at the transaction level below as well.
-			let maybe_existing = repo.try_find_reference(&args.from)
-				.tap_err(|e| warn!("ignoring error checking if {} already exists: {}", args.from, e));
+			let maybe_existing = repo.try_find_reference(&from)
+				.tap_err(|e| warn!("ignoring error checking if {} already exists: {}", from, e));
 
 			if let Ok(Some(existing_ref)) = maybe_existing {
 
@@ -434,19 +440,19 @@ fn main() -> miette::Result<()>
 				std::process::exit(2);
 			}
 
-			Victim::New(NewVictim::new(*kind, BString::from(args.from.clone())))
+			Victim::New(NewVictim::new(*kind, BString::from(from.clone())))
 		},
 		None => {
 			let reference = repo
-				.find_reference(&args.from)
+				.find_reference(&from)
 				.into_diagnostic()
-				.with_context(|| format!("while finding reference '{}'", &args.from))?;
+				.with_context(|| format!("while finding reference '{}'", &from))?;
 
 			// Make sure args.from is not ambiguous and can only refer to one ref.
 			// gix does not have a convenient "repo.find_references()", so what we do here
 			// is iterate through all refs, filter out ones that are the same as `reference`,
 			// and check for any that have the same shortening as our refspec.
-			let from_bytes: &BStr = args.from.as_bytes().into();
+			let from_bytes: &BStr = from.as_bytes().into();
 			let ambiguous_refs = repo.find_ambiguous_references(from_bytes)?;
             if let MaybeAmbigRef::Ambiguous { ref requested, ref possible } = ambiguous_refs {
 				eprintln!(
@@ -467,11 +473,11 @@ fn main() -> miette::Result<()>
 				check_worktrees(&repo, &reference);
 			}
 
-			Victim::Known(KnownVictim::from(BString::from(args.from.clone()), reference)?)
+			Victim::Known(KnownVictim::from(BString::from(from.clone()), reference)?)
 		},
 	};
 
-	let target = TargetRev::from(&repo, BString::from(args.to))?;
+	let target = TargetRev::from(&repo, BString::from(to))?;
 
     let reflog_msg = match victim {
         Victim::Known(ref victim_ref) => format!(

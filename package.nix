@@ -38,7 +38,7 @@ in craneLib.buildPackage (commonArgs // {
 
 	postInstall = ''
 		mkdir -p "$out/share/man/man1"
-		"$out/bin/git-point" --mangen "$out/share/man/man1" . .
+		"$out/bin/git-point" --mangen > "$out/share/man/man1/git-point.1"
 	'';
 
 	meta = {

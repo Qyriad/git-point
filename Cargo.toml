@@ -3,8 +3,12 @@ name = "git-point"
 version = "0.1.0"
 edition = "2021"
 authors = ["Qyriad <qyriad@qyriad.me>"]
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+description = "Set arbitrary refs without shooting yourself in the foot, a porcelain `git update-ref`"
+repository = "https://github.com/Qyriad/git-point"
+readme = true
+license = "MIT"
+keywords = ["git", "cli"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 bstr = "1.9.1"

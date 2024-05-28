@@ -8,7 +8,16 @@
 	inherit (stdenv) hostPlatform;
 
 	commonArgs = {
-		src = craneLib.cleanCargoSource ./.;
+		src = lib.fileset.toSource {
+			root = ./.;
+			fileset =	lib.fileset.unions [
+				./README.md
+				./src
+				./Cargo.toml
+				./Cargo.lock
+			];
+
+		};
 		strictDeps = true;
 		__structuredAttrs = true;
 
@@ -43,6 +52,7 @@ in craneLib.buildPackage (commonArgs // {
 
 	meta = {
 		homepage = "https://github.com/Qyirad/git-point";
+		description = "Set arbitrary refs without shooting yourself in the foot, a procelain `git update-ref`";
 		maintainers = with lib.maintainers; [ qyriad ];
 		license = with lib.licenses; [ mit ];
 		sourceProvenance = with lib.sourceTypes; [ fromSource ];

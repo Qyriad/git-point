@@ -13,4 +13,5 @@ clap_mangen = "0.2.20"
 env_logger = "0.11.3"
 gix = { version = "0.62.0", features = ["revision"] }
 log = { version = "0.4.21", features = ["std"] }
+miette = { version = "7.2.0", features = ["fancy"] }
 tap = "1.0.1"

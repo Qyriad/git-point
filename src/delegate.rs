@@ -18,7 +18,7 @@ use gix::revision::plumbing::spec::parse::delegate::{
 
 use crate::{RepositoryExt, MaybeAmbigRef};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 /// Gix revision parsing delegate which stubs everything except what we need to
 /// determine if the refs in a revision spec are ambiguous.
 pub struct StubDisambDelegate<'repo>
@@ -26,6 +26,7 @@ pub struct StubDisambDelegate<'repo>
 	pub repo: &'repo Repository,
 	pub kind: Option<SpecKind>,
 	pub found_refs: Option<MaybeAmbigRef<'repo>>,
+	pub error: Option<miette::Report>,
 }
 
 impl<'repo> StubDisambDelegate<'repo>
@@ -35,6 +36,7 @@ impl<'repo> StubDisambDelegate<'repo>
 			repo,
 			kind: None,
 			found_refs: None,
+			error: None,
 		}
 	}
 
@@ -87,9 +89,15 @@ impl<'repo> Revision for StubDisambDelegate<'repo>
 	{
         debug!("Delegate::find_ref({:?})", name);
 
-		let maybe_ambiguous_refs = self.repo
-			.find_ambiguous_references(name)
-			.ok()?;
+		let maybe_ambiguous_refs = match self.repo.find_ambiguous_references(name) {
+			Ok(refs) => refs,
+			Err(e) => {
+				assert!(self.error.is_none());
+				self.error = Some(e.wrap_err(format!("while looking for ref '{}'", name)));
+				return None;
+			},
+		};
+
 		self.found_refs = Some(maybe_ambiguous_refs);
 
 		Some(())

@@ -1,11 +1,11 @@
 use std::env;
-use std::error::Error as StdError;
 use std::iter;
 use std::path::PathBuf;
 
 use bstr::{BStr, BString, ByteSlice};
 use clap::CommandFactory;
 use clap::{Parser, ValueEnum, ArgAction};
+use miette::{Context, IntoDiagnostic};
 
 use gix::refs::transaction::Change;
 use gix::refs::transaction::LogChange;
@@ -23,8 +23,6 @@ use log::{trace, debug, warn, info, error};
 
 use tap::TapFallible;
 
-type BoxDynError = Box<dyn StdError>;
-
 mod delegate;
 
 #[derive(Debug, Clone)]
@@ -39,24 +37,24 @@ pub enum MaybeAmbigRef<'repo>
 
 pub trait RepositoryExt
 {
-	fn find_ambiguous_references(&self, refname: &BStr) -> Result<MaybeAmbigRef, BoxDynError>;
+	fn find_ambiguous_references(&self, refname: &BStr) -> miette::Result<MaybeAmbigRef>;
 }
 
 impl RepositoryExt for Repository
 {
-	fn find_ambiguous_references(&self, refname: &BStr) -> Result<MaybeAmbigRef, BoxDynError>
+	fn find_ambiguous_references(&self, refname: &BStr) -> miette::Result<MaybeAmbigRef>
 	{
 		let reference = self
 			.find_reference(refname)
-			.tap_err(|e| error!("while finding reference {}: {}", refname, e))?;
+			.into_diagnostic()?;
 
 		let refs_iter = self
 			.references()
-			.tap_err(|e| error!("while finding reference {}: {}", refname, e))?;
+			.into_diagnostic()?;
 
 		let ambiguous_refs: Vec<Reference> = refs_iter
 			.all()
-			.tap_err(|e| error!("while finding reference {}: {}", refname, e))?
+			.into_diagnostic()?
 			.filter_map(|r| match r {
 				// Note: .name() is the *full* name.
 				// Reference does not impl PartialEq, so we check by full name instead.
@@ -198,20 +196,23 @@ struct KnownVictim<'repo>
 impl<'repo> KnownVictim<'repo>
 {
 	/// Constructs a [VictimRef] from a [Reference].
-	pub fn from(revspec: BString, reference: Reference<'repo>) -> Result<Self, Box<dyn StdError>>
+	pub fn from(revspec: BString, reference: Reference<'repo>) -> miette::Result<Self>
 	{
 		let peeled = reference.clone().into_fully_peeled_id()
-			.tap_err(|e| error!("while peeling {}: {}", reference.name().as_bstr(), e))?;
+			.into_diagnostic()
+			.with_context(|| format!("while peeling {}", reference.name().as_bstr()))?;
 		let id = peeled.detach();
 
 		let commit = peeled
 			.object()
-			.tap_err(|e| error!("while finding object {}: {}", id.to_hex(), e))?
+			.into_diagnostic()
+			.with_context(|| format!("while finding object {}", id.to_hex()))?
 			.into_commit();
 
 		let commit_summary = commit
 			.message_raw()
-			.tap_err(|e| error!("while getting message of commit {}: {}", id.to_hex(), e))?
+			.into_diagnostic()
+			.with_context(|| format!("while getting message of commit {}", id.to_hex()))?
 			.lines()
 			.next()
 			.unwrap_or(b"<empty msg>");
@@ -264,7 +265,7 @@ struct TargetRev<'repo>
 impl<'repo> TargetRev<'repo>
 {
 	/// Constructs [TargetRev] from a revspec.
-	pub fn from(repo: &'repo Repository, revspec: BString) -> Result<Self, Box<dyn StdError>>
+	pub fn from(repo: &'repo Repository, revspec: BString) -> miette::Result<Self>
 	{
         // Bit of a hack here.
         // Gitoxide doesn't really have a way to use only part of its rev parsing logic.
@@ -280,7 +281,18 @@ impl<'repo> TargetRev<'repo>
         // If only one was found, then we just call gix's high-level rev parse function, because
         // *man* do I not want to reimplement the entire delegate just to save one extra rev parse.
         let mut revparsing_delegate = delegate::StubDisambDelegate::new(repo);
-        revparsing_delegate.parse(revspec.as_bstr())?;
+		match revparsing_delegate.parse(revspec.as_bstr()) {
+			Ok(v) => v,
+			Err(e) => return match e {
+				gix::revision::plumbing::spec::parse::Error::Delegate => {
+					let actual_error = revparsing_delegate.error.expect("unreachable");
+					Err(actual_error)
+				},
+				_ => {
+					Err(e).into_diagnostic()
+				},
+			},
+		};
         let found_refs = revparsing_delegate.found_refs.expect("unreachable");
 
         if let MaybeAmbigRef::Ambiguous { requested, possible } = found_refs {
@@ -296,17 +308,20 @@ impl<'repo> TargetRev<'repo>
         };
 
         let rev_id = repo.rev_parse_single(revspec.as_bstr())
-            .tap_err(|e| error!("while parsing revspec {}: {}", revspec.as_bstr(), e))?;
+			.into_diagnostic()
+			.with_context(|| format!("while parsing revspec {}", revspec.as_bstr()))?;
         let rev_hex = || rev_id.to_hex();
 
 		let commit = rev_id
 			.object()
-			.tap_err(|e| error!("while finding object {}: {}", rev_hex(), e))?
+			.into_diagnostic()
+			.with_context(|| format!("while finding object {}", rev_hex()))?
 			.into_commit();
 
 		let summary = commit
 			.message_raw()
-			.tap_err(|e| error!("while getting message of commit {}: {}", rev_hex(), e))?
+			.into_diagnostic()
+			.with_context(|| format!("while getting message of commit {}", rev_hex()))?
 			.lines()
 			.next()
 			.unwrap_or(b"<empty msg>");
@@ -362,7 +377,7 @@ fn check_worktrees(repo: &Repository, victim_ref: &Reference)
 	}
 }
 
-fn main() -> Result<(), Box<dyn StdError>>
+fn main() -> miette::Result<()>
 {
 	env_logger::builder()
 		// Default to INFO rather than WARN, but let the user override it.
@@ -376,18 +391,19 @@ fn main() -> Result<(), Box<dyn StdError>>
 		let man = clap_mangen::Man::new(GitPointCmd::command());
 
 		let mut man_buffer: Vec<u8> = Default::default();
-		man.render(&mut man_buffer)?;
+		man.render(&mut man_buffer).into_diagnostic()?;
 
-		std::fs::write(out_path.join("git-point.1"), man_buffer)?;
+		std::fs::write(out_path.join("git-point.1"), man_buffer).into_diagnostic()?;
 
 		eprintln!("wrote man pages to {}", out_path.display());
 		std::process::exit(0);
 	}
 
-	let cwd: PathBuf = env::current_dir()?;
+	let cwd: PathBuf = env::current_dir().into_diagnostic()?;
 
 	let repo: Repository = gix::open(&cwd)
-		.tap_err(|e| error!("while opening git repo in {}: {}", cwd.display(), e))?;
+		.into_diagnostic()
+		.with_context(|| format!("while opening git repo in {}", cwd.display()))?;
 
 	let victim = match &args.new {
 		Some(kind) => {
@@ -423,7 +439,8 @@ fn main() -> Result<(), Box<dyn StdError>>
 		None => {
 			let reference = repo
 				.find_reference(&args.from)
-				.tap_err(|e| error!("while finding reference {}: {}", &args.from, e))?;
+				.into_diagnostic()
+				.with_context(|| format!("while finding reference '{}'", &args.from))?;
 
 			// Make sure args.from is not ambiguous and can only refer to one ref.
 			// gix does not have a convenient "repo.find_references()", so what we do here
@@ -503,21 +520,18 @@ fn main() -> Result<(), Box<dyn StdError>>
 	}
 
 	let _edits = repo.edit_reference(transaction.clone())
-		.tap_err(|e| {
-			match &victim {
-				Victim::Known(_known) => error!(
-					"while mutating ref {} to {}: {}",
-					victim.name_bstr(),
-					target.resolved_id,
-					e,
-				),
-				Victim::New(_new) => error!(
-					"while creating ref {} at {}: {}",
-					victim.name_bstr(),
-					target.resolved_id,
-					e,
-				),
-			}
+		.into_diagnostic()
+		.with_context(|| match &victim {
+			Victim::Known(_know) => format!(
+				"while mutating ref {} to {}",
+				victim.name_bstr(),
+				target.resolved_id,
+			),
+			Victim::New(_new) => format!(
+				"while creating ref {} at {}",
+				victim.name_bstr(),
+				target.resolved_id,
+			),
 		})?;
 
 	match &victim {

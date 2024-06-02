@@ -8,6 +8,8 @@
 	inherit (stdenv) hostPlatform;
 
 	commonArgs = {
+		inherit stdenv;
+
 		src = lib.fileset.toSource {
 			root = ./.;
 			fileset =	lib.fileset.unions [

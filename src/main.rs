@@ -1,7 +1,7 @@
 #![doc = include_str!("../README.md")]
 
 use std::env;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::iter;
 use std::path::PathBuf;
 
@@ -9,6 +9,7 @@ use bstr::{BStr, BString, ByteSlice};
 use clap::CommandFactory;
 use clap::{Parser, ValueEnum, ArgAction};
 use miette::{Context, IntoDiagnostic};
+use owo_colors::{OwoColorize, Style, Styled};
 
 use gix::refs::transaction::Change;
 use gix::refs::transaction::LogChange;
@@ -27,6 +28,42 @@ use log::{trace, debug, warn, info, error};
 use tap::TapFallible;
 
 mod delegate;
+
+/// Like OwoColorize, but gate styling on an arbitary boolean condition.
+pub trait MaybeStyle: OwoColorize
+{
+	fn style_if(&self, should: bool, style: Style) -> Styled<&Self>;
+
+	/// Styles with ANSI yellow foreground.
+	fn style_as_commit_if(&self, should: bool) -> Styled<&Self>
+	{
+		self.style_if(should, Style::new().yellow())
+	}
+
+	/// Styles with ANSI blue foreground.
+	fn style_as_ref_if(&self, should: bool) -> Styled<&Self>
+	{
+		self.style_if(should, Style::new().blue())
+	}
+
+	/// Styles with ANSI bright red foreground.
+	fn style_as_error_if(&self, should: bool) -> Styled<&Self>
+	{
+		self.style_if(should, Style::new().bright_red())
+	}
+}
+
+impl<T: OwoColorize> MaybeStyle for T
+{
+	fn style_if(&self, should: bool, style: Style) -> Styled<&Self>
+	{
+		if should {
+			self.style(style)
+		} else {
+			self.style(Style::new())
+		}
+	}
+}
 
 #[derive(Debug, Clone)]
 pub enum MaybeAmbigRef<'repo>
@@ -122,7 +159,7 @@ impl NewRefKind
 	}
 }
 
-#[derive(Debug, Clone, PartialEq, Hash)]
+#[derive(Debug, Clone, PartialEq)]
 #[derive(Parser)]
 #[command(version, author, about)]
 struct GitPointCmd
@@ -143,6 +180,10 @@ struct GitPointCmd
 	/// This will *not* change any of the actual files in the worktree.
 	#[arg(long, short = 'W', action = ArgAction::SetTrue)]
 	pub allow_worktree: bool,
+
+	/// When to use terminal colors
+	#[arg(long, default_value = "auto")]
+	pub color: clap::ColorChoice,
 
 	/// Generate git-point.1 man page to stdout, and exit.
 	#[arg(long)]
@@ -270,7 +311,7 @@ struct TargetRev<'repo>
 impl<'repo> TargetRev<'repo>
 {
 	/// Constructs [TargetRev] from a revspec.
-	pub fn from(repo: &'repo Repository, revspec: BString) -> miette::Result<Self>
+	pub fn from(repo: &'repo Repository, revspec: BString, should_color: bool) -> miette::Result<Self>
 	{
         // Bit of a hack here.
         // Gitoxide doesn't really have a way to use only part of its rev parsing logic.
@@ -302,9 +343,10 @@ impl<'repo> TargetRev<'repo>
 
         if let MaybeAmbigRef::Ambiguous { requested, possible } = found_refs {
             eprintln!(
-                "\x1b[91merror:\x1b[0m refname '\x1b[34m{}\x1b[0m in '{}' is ambiguous and must be qualified; \
+                "{} refname '{}' in '{}' is ambiguous and must be qualified; \
                 could be any of: {}",
-                requested,
+				"error:".style_as_error_if(should_color),
+                requested.style_as_ref_if(should_color),
                 revspec,
                 bstr::join(", ", possible).as_bstr(),
             );
@@ -340,7 +382,7 @@ impl<'repo> TargetRev<'repo>
 }
 
 /// Will std::process:exit() if check condition matches.
-fn check_worktrees(repo: &Repository, victim_ref: &Reference)
+fn check_worktrees(repo: &Repository, victim_ref: &Reference, should_color: bool)
 {
 	let worktrees = repo
 		.worktrees()
@@ -371,9 +413,10 @@ fn check_worktrees(repo: &Repository, victim_ref: &Reference)
 
 		if tree_head.as_ref().map(|r| &r.inner) == Some(&victim_ref.inner) {
 			eprintln!(
-				"\x1b[91merror:\x1b[0m refusing to update ref \x1b[34m{}\x1b[0m checked out at {}; \
+				"{} refusing to update ref {} checked out at {}; \
 				pass --allow-worktree to override",
-				victim_ref.name().shorten(),
+				"error:".style_as_error_if(should_color),
+				victim_ref.name().shorten().style_as_ref_if(should_color),
 				dir.display(),
 			);
 
@@ -384,6 +427,11 @@ fn check_worktrees(repo: &Repository, victim_ref: &Reference)
 
 fn main() -> miette::Result<()>
 {
+	#[cfg(windows)]
+	{
+		let _ = enable_ansi_support::enable_ansi_support()
+			.tap_err(|e| eprintln!("could not enable Windows ANSI colors: {}", e));
+	}
 	env_logger::builder()
 		// Default to INFO rather than WARN, but let the user override it.
 		.filter_level(log::LevelFilter::Info)
@@ -402,6 +450,12 @@ fn main() -> miette::Result<()>
 
 		std::process::exit(0);
 	}
+
+	let should_color = match args.color {
+		clap::ColorChoice::Always => true,
+		clap::ColorChoice::Never => false,
+		clap::ColorChoice::Auto => std::io::stdout().is_terminal(),
+	};
 
 	// These can only be none if --mangen is specified, which always exists the process.
 	let from = args.from.take().unwrap();
@@ -434,9 +488,10 @@ fn main() -> miette::Result<()>
 					});
 
 				eprintln!(
-					"\x1b[91merror:\x1b[0m refusing to create ref \x1b[34m{}\x1b[0m which already exists at \x1b[33m{}\x1b[0m",
-					existing_ref.name().as_bstr(),
-					existing_id,
+					"{} refusing to create ref {} which already exists at {}",
+					"error:".style_as_error_if(should_color),
+					existing_ref.name().as_bstr().style_as_ref_if(should_color),
+					existing_id.style_as_commit_if(should_color),
 				);
 
 				std::process::exit(2);
@@ -457,10 +512,12 @@ fn main() -> miette::Result<()>
 			let from_bytes: &BStr = from.as_bytes().into();
 			let ambiguous_refs = repo.find_ambiguous_references(from_bytes)?;
             if let MaybeAmbigRef::Ambiguous { ref requested, ref possible } = ambiguous_refs {
+
 				eprintln!(
-					"\x1b[91merror:\x1b[0m refspec '\x1b[34m{}\x1b[0m' is ambiguous and must be qualified; \
+					"{} refspec '{}' is ambiguous and must be qualified; \
                     could be any of: {}",
-                    &requested,
+					"error:".style_as_error_if(should_color),
+                    &requested.style_as_ref_if(should_color),
 					bstr::join(", ", possible).as_bstr()
 				);
 
@@ -472,14 +529,14 @@ fn main() -> miette::Result<()>
 				// This function will exit the process if so.
 				// Technically this is a TOC/TOU race condition, but if someone else is
 				// concurrently mutating this repo then we're fucked anyway.
-				check_worktrees(&repo, &reference);
+				check_worktrees(&repo, &reference, should_color);
 			}
 
 			Victim::Known(KnownVictim::from(BString::from(from.clone()), reference)?)
 		},
 	};
 
-	let target = TargetRev::from(&repo, BString::from(to))?;
+	let target = TargetRev::from(&repo, BString::from(to), should_color)?;
 
     let reflog_msg = match victim {
         Victim::Known(ref victim_ref) => format!(
@@ -544,17 +601,17 @@ fn main() -> miette::Result<()>
 
 	match &victim {
 		Victim::Known(known) => eprintln!(
-			"Updated \x1b[34m{refname}\x1b[0m from \x1b[33m{previd}\x1b[0m ({prevmsg}) to \x1b[33m{newid}\x1b[0m ({newmsg})",
-			refname = known.name.as_bstr(),
-			previd = known.resolved_id.shorten_or_id(),
+			"Updated {refname} from {previd} ({prevmsg}) to {newid} ({newmsg})",
+			refname = known.name.as_bstr().style_as_ref_if(should_color),
+			previd = known.resolved_id.shorten_or_id().style_as_commit_if(should_color),
 			prevmsg = known.summary.as_bstr(),
-			newid = target.resolved_id.shorten_or_id(),
+			newid = target.resolved_id.shorten_or_id().style_as_commit_if(should_color),
 			newmsg = target.summary.as_bstr(),
 		),
 		Victim::New(new) => eprintln!(
-			"Created \x1b[34m{refname}\x1b[0m at \x1b[33m{target_id}\x1b[0m ({msg})",
-			refname = new.name.as_bstr(),
-			target_id = target.resolved_id.shorten_or_id(),
+			"Created {refname} at {target_id} ({msg})",
+			refname = new.name.as_bstr().style_as_ref_if(should_color),
+			target_id = target.resolved_id.shorten_or_id().style_as_commit_if(should_color),
 			msg = target.summary,
 		)
 	}

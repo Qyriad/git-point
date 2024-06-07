@@ -18,4 +18,8 @@ env_logger = "0.11.3"
 gix = { version = "0.62.0", features = ["revision"] }
 log = { version = "0.4.21", features = ["std"] }
 miette = { version = "7.2.0", features = ["fancy"] }
+owo-colors = { version = "4.0.0", features = ["alloc", "supports-color", "supports-colors"] }
 tap = "1.0.1"
+
+[target.'cfg(windows)'.dependencies]
+enable-ansi-support = "0.2.1"

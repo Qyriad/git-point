@@ -339,9 +339,9 @@ impl<'repo> TargetRev<'repo>
 				},
 			},
 		};
-        let found_refs = revparsing_delegate.found_refs.expect("unreachable");
+        let found_refs = revparsing_delegate.found_refs;
 
-        if let MaybeAmbigRef::Ambiguous { requested, possible } = found_refs {
+        if let Some(MaybeAmbigRef::Ambiguous { requested, possible }) = found_refs {
             eprintln!(
                 "{} refname '{}' in '{}' is ambiguous and must be qualified; \
                 could be any of: {}",

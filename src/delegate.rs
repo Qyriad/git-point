@@ -132,6 +132,6 @@ impl<'repo> RevParseDelegate for StubDisambDelegate<'repo>
 {
 	fn done(&mut self)
 	{
-        assert!(self.found_refs.is_some());
+		// We do nothing. Caller will do whatever needs to be done from here.
 	}
 }

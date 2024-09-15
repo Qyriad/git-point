@@ -274,7 +274,7 @@ impl<'repo> KnownVictim<'repo>
 
 	pub fn transaction_target(&self) -> Target
 	{
-		Target::Peeled(self.resolved_id.into())
+		Target::Object(self.resolved_id.into())
 	}
 }
 
@@ -390,7 +390,7 @@ impl<'repo> TargetRev<'repo>
 
 	pub fn transaction_target(&self) -> Target
 	{
-		Target::Peeled(self.resolved_id.detach())
+		Target::Object(self.resolved_id.detach())
 	}
 }
 

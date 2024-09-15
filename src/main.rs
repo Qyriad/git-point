@@ -271,6 +271,11 @@ impl<'repo> KnownVictim<'repo>
 			summary: BString::from(commit_summary.to_vec()),
 		})
 	}
+
+	pub fn transaction_target(&self) -> Target
+	{
+		Target::Peeled(self.resolved_id.into())
+	}
 }
 
 impl NewVictim
@@ -306,6 +311,8 @@ struct TargetRev<'repo>
 
 	/// The first line of the commit message.
 	summary: BString,
+
+	symref: Option<BString>,
 }
 
 impl<'repo> TargetRev<'repo>
@@ -377,7 +384,13 @@ impl<'repo> TargetRev<'repo>
 			revspec,
 			resolved_id: rev_id,
 			summary: BString::from(summary.to_vec()),
+			symref: None,
 		})
+	}
+
+	pub fn transaction_target(&self) -> Target
+	{
+		Target::Peeled(self.resolved_id.detach())
 	}
 }
 
@@ -560,12 +573,10 @@ fn main() -> miette::Result<()>
 				message: BString::from(reflog_msg.clone()),
 			},
 			expected: match &victim {
-				Victim::Known(victim_ref) => {
-					PreviousValue::MustExistAndMatch(Target::Peeled(victim_ref.resolved_id.into()))
-				},
+				Victim::Known(victim_ref) => PreviousValue::MustExistAndMatch(victim_ref.transaction_target()),
 				Victim::New(_new) => PreviousValue::MustNotExist,
 			},
-			new: Target::Peeled(target.resolved_id.detach()),
+			new: target.transaction_target(),
 		},
 		name: {
 			FullName::try_from(victim.name_bstr()).unwrap()

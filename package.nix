@@ -10,8 +10,8 @@
   # Since we take stdenv, we should be good citizens and pass it forward. However,
   # passing stdenv to buildPackage or the like does nothing; we need to change the stdenv
   # mkCargoDerivation (which buildPackage and friends are wrappers around) uses.
-  craneLib' = craneLib.overrideScope (final: prev: {
-    mkCargoDerivation = prev.mkCargoDerivation.override { inherit stdenv; };
+  craneLib' = craneLib.overrideScope (finalCrane: prevCrane: {
+    mkCargoDerivation = prevCrane.mkCargoDerivation.override { inherit stdenv; };
   });
 
 	commonArgs = {

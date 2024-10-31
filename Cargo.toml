@@ -11,14 +11,14 @@ keywords = ["git", "cli"]
 categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
-bstr = "1.9.1"
-clap = { version = "4.5.4", features = ["wrap_help", "derive"] }
-clap_mangen = "0.2.20"
-env_logger = "0.11.3"
+bstr = "1.10.0"
+clap = { version = "4.5.20", features = ["wrap_help", "derive"] }
+clap_mangen = "0.2.24"
+env_logger = "0.11.5"
 gix = { version = "0.66.0", features = ["revision"] }
-log = { version = "0.4.21", features = ["std"] }
+log = { version = "0.4.22", features = ["std"] }
 miette = { version = "7.2.0", features = ["fancy"] }
-owo-colors = { version = "4.0.0", features = ["alloc", "supports-color", "supports-colors"] }
+owo-colors = { version = "4.1.0", features = ["alloc", "supports-color", "supports-colors"] }
 tap = "1.0.1"
 
 [target.'cfg(windows)'.dependencies]

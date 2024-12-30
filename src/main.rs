@@ -206,6 +206,7 @@ struct NewVictim
 	short: BString,
 }
 
+#[allow(clippy::needless_lifetimes)]
 impl<'repo> Victim<'repo>
 {
 	pub fn name_bstr(&self) -> &BStr

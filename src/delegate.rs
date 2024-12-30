@@ -1,3 +1,5 @@
+#![allow(clippy::needless_lifetimes)]
+
 use bstr::BStr;
 #[allow(unused)]
 use log::{trace, debug, warn, info, error};

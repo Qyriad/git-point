@@ -15,7 +15,7 @@ bstr = "1.10.0"
 clap = { version = "4.5.20", features = ["wrap_help", "derive"] }
 clap_mangen = "0.2.24"
 env_logger = "0.11.5"
-gix = { version = "0.69.1", features = ["revision"] }
+gix = { version = "0.70.0", features = ["revision"] }
 log = { version = "0.4.22", features = ["std"] }
 miette = { version = "7.2.0", features = ["fancy"] }
 owo-colors = { version = "4.1.0", features = ["alloc", "supports-color", "supports-colors"] }

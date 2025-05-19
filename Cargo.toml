@@ -23,3 +23,8 @@ tap = "1.0.1"
 
 [target.'cfg(windows)'.dependencies]
 enable-ansi-support = "0.2.1"
+
+[dev-dependencies]
+assert_cmd = "2.0.17"
+tempfile = "3.20.0"
+which = "7.0.3"

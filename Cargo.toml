@@ -1,6 +1,6 @@
 [package]
 name = "git-point"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 authors = ["Qyriad <qyriad@qyriad.me>"]
 description = "Set arbitrary refs without shooting yourself in the foot, a porcelain `git update-ref`"

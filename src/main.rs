@@ -415,7 +415,7 @@ fn check_worktrees(repo: &Repository, victim_ref: &Reference, should_color: bool
 		.chain(iter::once(repo.clone()));
 
 	for tree_repo in worktree_repos {
-		let dir = tree_repo.work_dir().expect("unreachable");
+		let dir = tree_repo.workdir().expect("unreachable");
 		debug!("checking if worktree {} has {} checked out", dir.display(), victim_ref.name().as_bstr());
 
 		let tree_head = tree_repo

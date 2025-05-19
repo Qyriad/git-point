@@ -7,14 +7,10 @@
 
 	inherit (stdenv) hostPlatform;
 
-  # Since we take stdenv, we should be good citizens and pass it forward. However,
-  # passing stdenv to buildPackage or the like does nothing; we need to change the stdenv
-  # mkCargoDerivation (which buildPackage and friends are wrappers around) uses.
-  craneLib' = craneLib.overrideScope (finalCrane: prevCrane: {
-    mkCargoDerivation = prevCrane.mkCargoDerivation.override { inherit stdenv; };
-  });
-
 	commonArgs = {
+
+		# Since we take stdenv, we should be good citizens and pass it forward.
+		stdenv = _: stdenv;
 
 		src = lib.fileset.toSource {
 			root = ./.;
@@ -34,22 +30,22 @@
 		];
 	};
 
-	cargoArtifacts = craneLib'.buildDepsOnly commonArgs;
+	cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
-in craneLib'.buildPackage (commonArgs // {
+in craneLib.buildPackage (commonArgs // {
 
 	inherit cargoArtifacts;
 
 	passthru.mkDevShell = {
 		self,
 		rust-analyzer,
-	}: craneLib'.devShell {
+	}: craneLib.devShell {
 		inherit cargoArtifacts;
 		inputsFrom = [ self ];
 		packages = [ rust-analyzer ];
 	};
 
-	passthru.clippy = craneLib'.cargoClippy (commonArgs // {
+	passthru.clippy = craneLib.cargoClippy (commonArgs // {
 		inherit cargoArtifacts;
 	});
 

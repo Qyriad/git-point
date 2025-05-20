@@ -1,11 +1,12 @@
 use std::env;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::LazyLock;
 
-use assert_cmd::{cargo::CommandCargoExt, assert::OutputAssertExt};
+use common::CommandWrapper;
 
-const CARGO_TARGET_TMPDIR: &'static str = env!("CARGO_TARGET_TMPDIR");
+mod common;
+
+const CARGO_TARGET_TMPDIR: &str = env!("CARGO_TARGET_TMPDIR");
 
 static GIT: LazyLock<PathBuf> = LazyLock::new(|| {
 	which::which("git")
@@ -21,12 +22,12 @@ where
 	let current_dir = env::current_dir().expect("cannot get current working directory");
 
 	env::set_current_dir(directory)
-		.expect(&format!("cannot cd into {}", directory.display()));
+		.unwrap_or_else(|e| panic!("cannot cd into {}: {e}", directory.display()));
 
 	let res = f(directory);
 
 	env::set_current_dir(&current_dir)
-		.expect(&format!("cannot cd back to original directory {}", current_dir.display()));
+		.unwrap_or_else(|e| panic!("cannot cd back to original directory {}: {e}", current_dir.display()));
 
 	res
 }
@@ -36,67 +37,51 @@ fn basic()
 {
 	let git = GIT.as_path();
 
+	let gitcmd = || CommandWrapper::new("git", git);
+	let gitpointcmd = || CommandWrapper::cargo_bin("git-point");
+
 	let tempdir = tempfile::Builder::new()
 		.tempdir_in(CARGO_TARGET_TMPDIR)
-		.expect(&format!("cannot create temporary directory in {} for test", CARGO_TARGET_TMPDIR));
+		.unwrap_or_else(|e| panic!("cannot create temporary directory in {} for test: {e}", CARGO_TARGET_TMPDIR));
 
 	with_dir(tempdir.path(), |_dir| {
-		Command::new(git)
+		gitcmd()
 			.arg("init")
-			.assert()
-			.success();
+			.assert_spawn_exit_ok();
 
-		Command::new(git)
-			.args(&["commit", "--allow-empty", "-m", "initial commit"])
-			.assert()
-			.success();
+		gitcmd()
+			.args(["commit", "--allow-empty", "-m", "initial commit"])
+			.assert_spawn_exit_ok();
 
-		let initial_commit = Command::new(&*GIT)
-			.args(&["rev-parse", "@"])
-			.assert()
-			.success()
-			.get_output()
-			.to_owned();
+		let initial_commit = gitcmd()
+			.args(["rev-parse", "@"])
+			.assert_spawn_exit_ok_with_output();
 
-		Command::new(git)
-			.args(&["branch", "initial"])
-			.assert()
-			.success();
+		gitcmd()
+			.args(["branch", "initial"])
+			.assert_spawn_exit_ok();
 
-		let initial_branch_rev = Command::new(git)
-			.args(&["rev-parse", "initial"])
-			.assert()
-			.success()
-			.get_output()
-			.to_owned();
+		let initial_branch_rev = gitcmd()
+			.args(["rev-parse", "initial"])
+			.assert_spawn_exit_ok_with_output();
 
 		assert_eq!(initial_commit, initial_branch_rev);
 
-		Command::new(git)
-			.args(&["commit", "--allow-empty", "-m", "second-commit"])
-			.assert()
-			.success();
+		gitcmd()
+			.args(["commit", "--allow-empty", "-m", "second-commit"])
+			.assert_spawn_exit_ok();
 
-		let second_commit = Command::new(git)
-			.args(&["rev-parse", "@"])
-			.assert()
-			.success()
-			.get_output()
-			.to_owned();
+		let second_commit = gitcmd()
+			.args(["rev-parse", "@"])
+			.assert_spawn_exit_ok_with_output();
 
-		Command::cargo_bin("git-point")
-			.unwrap()
-			.arg("initial")
-			.arg("@")
-			.assert()
-			.success();
+		gitpointcmd()
+			.args(["initial", "@"])
+			.assert_spawn_exit_ok();
 
-		let new_initial_branch_rev = Command::new(git)
-			.args(&["rev-parse", "initial"])
-			.assert()
-			.success()
-			.get_output()
-			.to_owned();
+		let new_initial_branch_rev = gitcmd()
+			.args(["rev-parse", "initial"])
+			.assert_spawn_exit_ok_with_output();
 
 		assert_eq!(new_initial_branch_rev, second_commit);
 	});

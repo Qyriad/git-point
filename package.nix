@@ -3,6 +3,7 @@
 	craneLib,
 	stdenv,
 	libiconv,
+	git,
 }: let
 
 	inherit (stdenv) hostPlatform;
@@ -17,6 +18,7 @@
 			fileset =	lib.fileset.unions [
 				./README.md
 				./src
+				./tests
 				./Cargo.toml
 				./Cargo.lock
 			];
@@ -27,6 +29,10 @@
 
 		buildInputs = lib.optionals hostPlatform.isDarwin [
 			libiconv
+		];
+
+		nativeCheckInputs = [
+			git
 		];
 	};
 

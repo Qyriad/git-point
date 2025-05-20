@@ -10,6 +10,10 @@ license = "MIT"
 keywords = ["git", "cli"]
 categories = ["command-line-utilities", "development-tools"]
 
+[[test]]
+name = "basic"
+path = "tests/basic.rs"
+
 [dependencies]
 bstr = "1.10.0"
 clap = { version = "4.5.20", features = ["wrap_help", "derive"] }

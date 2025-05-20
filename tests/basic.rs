@@ -45,6 +45,9 @@ fn basic()
 		.unwrap_or_else(|e| panic!("cannot create temporary directory in {} for test: {e}", CARGO_TARGET_TMPDIR));
 
 	with_dir(tempdir.path(), |_dir| {
+		env::set_var("GIT_CONFIG_USER_NAME", "dummy");
+		env::set_var("GIT_CONFIG_USER_EMAIL", "dummy@example.com");
+
 		gitcmd()
 			.arg("init")
 			.assert_spawn_exit_ok();

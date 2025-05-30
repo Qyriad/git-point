@@ -32,6 +32,23 @@ where
 	res
 }
 
+fn setup_git(gitcmd: &dyn Fn() -> CommandWrapper)
+{
+	gitcmd()
+		.args(["init", "--initial-branch=main"])
+		.assert_spawn_exit_ok();
+
+	gitcmd()
+		.arg("config")
+		.args(["user.name", "dummy"])
+		.assert_spawn_exit_ok();
+
+	gitcmd()
+		.arg("config")
+		.args(["user.email", "dummy@example.com"])
+		.assert_spawn_exit_ok();
+}
+
 #[test]
 fn basic()
 {
@@ -45,12 +62,8 @@ fn basic()
 		.unwrap_or_else(|e| panic!("cannot create temporary directory in {} for test: {e}", CARGO_TARGET_TMPDIR));
 
 	with_dir(tempdir.path(), |_dir| {
-		env::set_var("GIT_CONFIG_USER_NAME", "dummy");
-		env::set_var("GIT_CONFIG_USER_EMAIL", "dummy@example.com");
 
-		gitcmd()
-			.arg("init")
-			.assert_spawn_exit_ok();
+		setup_git(&gitcmd);
 
 		gitcmd()
 			.args(["commit", "--allow-empty", "-m", "initial commit"])

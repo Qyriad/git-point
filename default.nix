@@ -1,13 +1,9 @@
 # Unlocked version. For locked inputs, use the flake.
 {
 	pkgs ? import <nixpkgs> { },
-	craneLib ? let
-		crane = fetchGit {
-			url = "https://github.com/ipetkov/crane";
-		};
-	in import crane { inherit pkgs; },
+	qpkgs ? let
+		qyriad-nur = fetchTarball "https://github.com/Qyriad/nur-packages/archive/main.tar.gz";
+	in import qyriad-nur { inherit pkgs; },
 }:
 
-pkgs.callPackage ./package.nix {
-	inherit craneLib;
-}
+qpkgs.callPackage ./package.nix { }

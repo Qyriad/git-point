@@ -1,59 +1,53 @@
 {
 	lib,
-	craneLib,
 	stdenv,
+	rustPlatform,
+	rustHooks,
+	cargo,
 	libiconv,
 	git,
+}: lib.callWith' rustPlatform ({
+	importCargoLock,
 }: let
+	inherit (lib.mkPlatformPredicates stdenv.hostPlatform)
+		optionalDarwin
+	;
 
-	inherit (stdenv) hostPlatform;
+	cargoToml = lib.importTOML ./Cargo.toml;
+in stdenv.mkDerivation (self: {
+	pname = cargoToml.package.name;
+	version = cargoToml.package.version;
 
-	commonArgs = {
+	strictDeps = true;
+	__structuredAttrs = true;
+	doCheck = true;
 
-		# Since we take stdenv, we should be good citizens and pass it forward.
-		stdenv = _: stdenv;
-
-		src = lib.fileset.toSource {
-			root = ./.;
-			fileset =	lib.fileset.unions [
-				./README.md
-				./src
-				./tests
-				./Cargo.toml
-				./Cargo.lock
-			];
-
-		};
-		strictDeps = true;
-		__structuredAttrs = true;
-
-		buildInputs = lib.optionals hostPlatform.isDarwin [
-			libiconv
-		];
-
-		nativeCheckInputs = [
-			git
+	src = lib.fileset.toSource {
+		root = ./.;
+		fileset = lib.fileset.unions [
+			./README.md
+			./src
+			./tests
+			./Cargo.toml
+			./Cargo.lock
 		];
 	};
 
-	cargoArtifacts = craneLib.buildDepsOnly commonArgs;
-
-in craneLib.buildPackage (commonArgs // {
-
-	inherit cargoArtifacts;
-
-	passthru.mkDevShell = {
-		self,
-		rust-analyzer,
-	}: craneLib.devShell {
-		inherit cargoArtifacts;
-		inputsFrom = [ self ];
-		packages = [ rust-analyzer ];
+	cargoDeps = importCargoLock {
+		lockFile = ./Cargo.lock;
 	};
 
-	passthru.clippy = craneLib.cargoClippy (commonArgs // {
-		inherit cargoArtifacts;
-	});
+	nativeBuildInputs = rustHooks.asList ++ [
+		cargo
+	];
+
+	buildInputs = optionalDarwin [
+		libiconv
+	];
+
+	nativeCheckInputs = [
+		git
+	];
 
 	postInstall = ''
 		mkdir -p "$out/share/man/man1"
@@ -66,8 +60,7 @@ in craneLib.buildPackage (commonArgs // {
 		maintainers = with lib.maintainers; [ qyriad ];
 		license = with lib.licenses; [ mit ];
 		sourceProvenance = with lib.sourceTypes; [ fromSource ];
-		platforms = with lib.platforms; all;
+		platforms = lib.platforms.all;
 		mainProgram = "git-point";
 	};
-})
-
+}))

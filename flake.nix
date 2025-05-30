@@ -2,20 +2,23 @@
 	inputs = {
 		nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 		flake-utils.url = "github:numtide/flake-utils";
-		crane.url = "github:ipetkov/crane";
+		qyriad-nur = {
+			url = "github:Qyriad/nur-packages";
+			flake = false;
+		};
 	};
 
 	outputs = {
 		self,
 		nixpkgs,
 		flake-utils,
-		crane,
+		qyriad-nur,
 	}: flake-utils.lib.eachDefaultSystem (system: let
 
 		pkgs = import nixpkgs { inherit system; };
-		craneLib = import crane { inherit pkgs; };
+		qpkgs = import qyriad-nur { inherit pkgs; };
 
-		git-point = import ./default.nix { inherit pkgs craneLib; };
+		git-point = import ./default.nix { inherit pkgs qpkgs; };
 
 	in {
 		packages = {

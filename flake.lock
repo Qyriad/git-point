@@ -1,20 +1,5 @@
 {
   "nodes": {
-    "crane": {
-      "locked": {
-        "lastModified": 1747587869,
-        "narHash": "sha256-Zay3WJdSvC2VQmNqWSVLBOg/1iS/0/Q0c9JOBsB+3qw=",
-        "owner": "ipetkov",
-        "repo": "crane",
-        "rev": "76603d32f18e0e378d9f6335c8fc286413493655",
-        "type": "github"
-      },
-      "original": {
-        "owner": "ipetkov",
-        "repo": "crane",
-        "type": "github"
-      }
-    },
     "flake-utils": {
       "inputs": {
         "systems": "systems"
@@ -49,11 +34,27 @@
         "type": "github"
       }
     },
+    "qyriad-nur": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1747851878,
+        "narHash": "sha256-0PciKmD2rCY6jYWMSwYGinlzWiWyMzum2oQ1LcUu+8w=",
+        "owner": "Qyriad",
+        "repo": "nur-packages",
+        "rev": "2200861ef7baec3c779ab0de482d4ab760d34429",
+        "type": "github"
+      },
+      "original": {
+        "owner": "Qyriad",
+        "repo": "nur-packages",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
-        "crane": "crane",
         "flake-utils": "flake-utils",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "qyriad-nur": "qyriad-nur"
       }
     },
     "systems": {

@@ -26,11 +26,11 @@
 			inherit git-point;
 		};
 
-		devShells.default = pkgs.callPackage git-point.mkDevShell { self = git-point; };
+		devShells.default = import ./shell.nix { inherit pkgs qpkgs git-point; };
 
 		checks = {
 			package = self.packages.${system}.git-point;
-			clippy = self.packages.${system}.git-point.clippy;
+			#clippy = self.packages.${system}.git-point.clippy;
 			devShell = self.devShells.${system}.default;
 		};
 	}); # outputs

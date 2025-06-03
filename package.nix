@@ -54,6 +54,16 @@ in stdenv.mkDerivation (self: {
 		"$out/bin/git-point" --mangen > "$out/share/man/man1/git-point.1"
 	'';
 
+	passthru.mkDevShell = {
+		mkShell,
+		rustc,
+	}: mkShell {
+		inputsFrom = [ self.finalPackage ];
+		packages = [
+			rustc
+		];
+	};
+
 	meta = {
 		homepage = "https://github.com/Qyirad/git-point";
 		description = "Set arbitrary refs without shooting yourself in the foot, a procelain `git update-ref`";
